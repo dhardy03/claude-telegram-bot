@@ -1,3 +1,20 @@
-venv
-.idea
+# dependencies
+venv/
+
+# environment variables
 .env
+
+# IDE
+.idea/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# docker
+*.log

@@ -1,69 +1,81 @@
-#imports
+# imports
 import os
 import logging
 import anthropic
+import uvicorn
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
+from fastapi import FastAPI, Request, Response
+from google.cloud import firestore
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-#env file
+# load .env for local dev (no-op in Cloud Run)
 load_dotenv()
 
-#initialise logging
+# initialise logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-#connect to claude api
+# connect to claude api
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-#storing convos
-convo_history: dict[int, list] = {}
+# firestore async client — authenticated automatically on Cloud Run
+db = firestore.AsyncClient()
+
+
+# ---- firestore helpers ----
+
+async def get_history(user_id: int) -> list:
+    doc = await db.collection("conversations").document(str(user_id)).get()
+    if doc.exists:
+        return doc.to_dict().get("messages", [])
+    return []
+
+
+async def save_history(user_id: int, messages: list):
+    await db.collection("conversations").document(str(user_id)).set({"messages": messages})
+
+
+async def clear_history(user_id: int):
+    await db.collection("conversations").document(str(user_id)).delete()
+
+
+# ---- handlers ----
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Hi! I am online."
-    )
+    await update.message.reply_text("Hi! I am online.")
+
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    convo_history.pop(user_id, None)
+    await clear_history(user_id)
     await update.message.reply_text("🧹 Conversation cleared!")
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    # Init history for new users
-    if user_id not in convo_history:
-        convo_history[user_id] = []
+    # load history from firestore
+    messages = await get_history(user_id)
+    messages.append({"role": "user", "content": user_message})
 
-    # Append user message
-    convo_history[user_id].append({
-        "role": "user",
-        "content": user_message
-    })
-
-    # Show typing indicator
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action="typing"
-    )
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
         response = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=1024,
             system="You are an assistant. Try to be as helpful as possible and clear in your responses.",
-            messages=convo_history[user_id]
+            messages=messages
         )
 
         assistant_message = response.content[0].text
+        messages.append({"role": "assistant", "content": assistant_message})
 
-        # Append assistant response to history
-        convo_history[user_id].append({
-            "role": "assistant",
-            "content": assistant_message
-        })
+        # persist updated history
+        await save_history(user_id, messages)
 
         # Telegram messages max 4096 chars — split if needed
         if len(assistant_message) > 4096:
@@ -74,18 +86,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Error calling Claude: {e}")
-        await update.message.reply_text("shits fucked")
+        await update.message.reply_text("Something went wrong, please try again.")
 
-def main():
-    app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
 
-    #commands
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("clear", clear))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+# ---- FastAPI web server ----
 
-    logger.info("AI with the braids")
-    app.run_polling()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    bot_app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("clear", clear))
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.state.bot_app = bot_app
+
+    await bot_app.initialize()
+
+    webhook_url = os.getenv("WEBHOOK_URL")
+    if webhook_url:
+        await bot_app.bot.set_webhook(f"{webhook_url}/webhook")
+        logger.info(f"Webhook registered at {webhook_url}/webhook")
+    else:
+        logger.warning("WEBHOOK_URL not set — webhook not registered.")
+
+    await bot_app.start()
+    yield
+    await bot_app.stop()
+    await bot_app.shutdown()
+
+
+web_app = FastAPI(lifespan=lifespan)
+
+
+@web_app.get("/")
+async def health_check():
+    return {"status": "ok"}
+
+
+@web_app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, request.app.state.bot_app.bot)
+    await request.app.state.bot_app.process_update(update)
+    return Response(status_code=200)
+
+
+# ---- entrypoint ----
 
 if __name__ == "__main__":
-    main()
+    if os.getenv("LOCAL_POLLING"):
+        # local dev: polling mode
+        logger.info("Starting in polling mode (local dev)")
+        import asyncio
+        from telegram.ext import Application
+
+        async def run_polling():
+            bot_app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
+            bot_app.add_handler(CommandHandler("start", start))
+            bot_app.add_handler(CommandHandler("clear", clear))
+            bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            bot_app.run_polling()
+
+        bot_app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
+        bot_app.add_handler(CommandHandler("start", start))
+        bot_app.add_handler(CommandHandler("clear", clear))
+        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        bot_app.run_polling()
+    else:
+        # Cloud Run / production: web server
+        port = int(os.getenv("PORT", 8080))
+        logger.info(f"Starting web server on port {port}")
+        uvicorn.run(web_app, host="0.0.0.0", port=port)
