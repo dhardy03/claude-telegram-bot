@@ -132,20 +132,10 @@ async def webhook(request: Request):
 
 # ---- entrypoint ----
 
-if __name__ == "__main__":
+def main():
     if os.getenv("LOCAL_POLLING"):
         # local dev: polling mode
         logger.info("Starting in polling mode (local dev)")
-        import asyncio
-        from telegram.ext import Application
-
-        async def run_polling():
-            bot_app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
-            bot_app.add_handler(CommandHandler("start", start))
-            bot_app.add_handler(CommandHandler("clear", clear))
-            bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-            bot_app.run_polling()
-
         bot_app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("clear", clear))
@@ -156,3 +146,7 @@ if __name__ == "__main__":
         port = int(os.getenv("PORT", 8080))
         logger.info(f"Starting web server on port {port}")
         uvicorn.run(web_app, host="0.0.0.0", port=port)
+
+
+if __name__ == "__main__":
+    main()

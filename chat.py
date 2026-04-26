@@ -12,8 +12,10 @@ Commands:
 
 import os
 import subprocess
+import getpass
 from dotenv import load_dotenv
 import anthropic
+from google.cloud import firestore
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -25,6 +27,27 @@ load_dotenv()
 
 console = Console()
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# firestore — sync client, keyed by OS username so each machine user has their own history
+db = firestore.Client()
+CLI_USER_ID = f"cli_{getpass.getuser()}"
+
+
+# ---- firestore helpers ----
+
+def load_history() -> list:
+    doc = db.collection("conversations").document(CLI_USER_ID).get()
+    if doc.exists:
+        return doc.to_dict().get("messages", [])
+    return []
+
+
+def persist_history(messages: list):
+    db.collection("conversations").document(CLI_USER_ID).set({"messages": messages})
+
+
+def delete_history():
+    db.collection("conversations").document(CLI_USER_ID).delete()
 
 
 # ---- tool definitions ----
@@ -204,6 +227,22 @@ def show_tool_call(name: str, inputs: dict):
     console.print(f"  {icon} [bold dim]{name}[/bold dim]  [dim]{detail}[/dim]")
 
 
+# ---- serialization helper ----
+
+def serialize_content(content) -> list:
+    """Convert Anthropic SDK content blocks to plain dicts for Firestore storage."""
+    result = []
+    for block in content:
+        if hasattr(block, "type"):
+            if block.type == "text":
+                result.append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                result.append({"type": "tool_use", "id": block.id, "name": block.name, "input": block.input})
+        else:
+            result.append(block)  # already a plain dict (e.g. tool_result)
+    return result
+
+
 # ---- agentic loop ----
 
 def run_agent(history: list) -> str:
@@ -227,13 +266,14 @@ def run_agent(history: list) -> str:
                 messages=history
             )
 
-        history.append({"role": "assistant", "content": response.content})
+        serialized = serialize_content(response.content)
+        history.append({"role": "assistant", "content": serialized})
 
         if response.stop_reason == "end_turn":
             # extract final text
-            for block in response.content:
-                if hasattr(block, "text"):
-                    return block.text
+            for block in serialized:
+                if block.get("type") == "text":
+                    return block["text"]
             return ""
 
         elif response.stop_reason == "tool_use":
@@ -281,10 +321,12 @@ def run_agent(history: list) -> str:
 
 # ---- main chat loop ----
 
-def show_banner():
+def show_banner(history_len: int):
+    saved = f"  {history_len // 2} turns restored from Firestore" if history_len else ""
     console.print(Panel.fit(
         "[bold cyan]AI Bot — CLI[/bold cyan]\n"
         f"[dim]cwd: {os.getcwd()}[/dim]\n"
+        f"[dim]{saved or 'No saved history'}[/dim]\n"
         "[dim]Type [bold]/help[/bold] for commands[/dim]",
         border_style="cyan"
     ))
@@ -305,8 +347,9 @@ def show_help():
 
 
 def chat():
-    show_banner()
-    history = []
+    with console.status("[dim]Loading history...[/dim]", spinner="dots"):
+        history = load_history()
+    show_banner(len(history))
 
     while True:
         try:
@@ -327,6 +370,7 @@ def chat():
                 break
             elif cmd == "/clear":
                 history = []
+                delete_history()
                 console.print("[dim]Conversation cleared.[/dim]\n")
             elif cmd == "/help":
                 show_help()
@@ -353,6 +397,9 @@ def chat():
             console.print(f"\n[red]Error:[/red] {e}\n")
             history.pop()
             continue
+
+        # persist after every exchange
+        persist_history(history)
 
         if reply:
             console.print()
