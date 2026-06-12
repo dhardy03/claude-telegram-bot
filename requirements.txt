@@ -4,5 +4,6 @@ python-dotenv==1.2.2
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
 google-cloud-datastore==1.15.5
-setuptools>=40.0.0
+setuptools>=65.0.0
+importlib-resources>=5.0.0
 six>=1.16.0
