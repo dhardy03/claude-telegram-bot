@@ -2,10 +2,13 @@ FROM python:3.12
 
 WORKDIR /app
 
-# install python dependencies - setuptools must be installed first and kept
+# install python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --upgrade setuptools wheel && \
+    pip install -r requirements.txt && \
+    python -c "import pkg_resources; print('pkg_resources OK')" && \
+    python -c "from google.cloud import datastore; print('google-cloud-datastore OK')"
 
 # copy application code  
 COPY bot.py .
