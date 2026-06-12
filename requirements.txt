@@ -1,0 +1,8 @@
+anthropic==0.97.0
+python-telegram-bot==22.7
+python-dotenv==1.2.2
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+google-cloud-datastore==1.15.5
+setuptools>=40.0.0
+six>=1.16.0
