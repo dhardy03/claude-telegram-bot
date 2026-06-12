@@ -9,11 +9,11 @@ RUN apt-get update && \
 
 # install python dependencies with proper setuptools
 COPY requirements.txt .
-RUN pip install --upgrade pip wheel && \
-    pip install "setuptools>=65.0.0" "importlib-resources>=5.0.0" && \
-    pip install -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install "setuptools>=70.0.0" "wheel" "importlib-metadata>=6.0.0" "importlib-resources>=5.0.0" && \
+    python -m pip install -r requirements.txt
 
-# copy application code
+# copy application code  
 COPY bot.py .
 
 # Cloud Run injects PORT at runtime (default 8080)
