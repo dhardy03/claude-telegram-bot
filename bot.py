@@ -6,7 +6,7 @@ import uvicorn
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
-from google.cloud import firestore
+from google.cloud import datastore
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -20,25 +20,30 @@ logger = logging.getLogger(__name__)
 # connect to claude api
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# firestore async client — authenticated automatically on Cloud Run
-db = firestore.AsyncClient()
+# google cloud datastore client — authenticated automatically on Cloud Run
+ds_client = datastore.Client()
 
 
-# ---- firestore helpers ----
+# ---- google cloud datastore helpers ----
 
 async def get_history(user_id: int) -> list:
-    doc = await db.collection("conversations").document(str(user_id)).get()
-    if doc.exists:
-        return doc.to_dict().get("messages", [])
+    key = ds_client.key("Conversation", str(user_id))
+    entity = ds_client.get(key)
+    if entity:
+        return entity.get("messages", [])
     return []
 
 
 async def save_history(user_id: int, messages: list):
-    await db.collection("conversations").document(str(user_id)).set({"messages": messages})
+    key = ds_client.key("Conversation", str(user_id))
+    entity = datastore.Entity(key=key)
+    entity["messages"] = messages
+    ds_client.put(entity)
 
 
 async def clear_history(user_id: int):
-    await db.collection("conversations").document(str(user_id)).delete()
+    key = ds_client.key("Conversation", str(user_id))
+    ds_client.delete(key)
 
 
 # ---- handlers ----
@@ -65,9 +70,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-haiku-4-5",
             max_tokens=1024,
-            system="You are an assistant. Try to be as helpful as possible and clear in your responses.",
+            system="You are an assistant. Try to be as helpful as possible and clear in your responses. Try to keep responses shorter as this is within a texting context.",
             messages=messages
         )
 
