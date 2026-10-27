@@ -10,13 +10,14 @@ setup(
         "fastapi==0.115.12",
         "uvicorn[standard]==0.34.2",
         "python-dotenv==1.2.2",
-        "google-cloud-firestore==2.27.0",
+        "google-cloud-datastore==1.14.0",
+        "google-cloud-firestore==2.15.0",
         "rich",
     ],
     entry_points={
         "console_scripts": [
             "claude-bot=bot:main",
-            "R2D2-bot=chat:chat",
+            "claude-cli=chat:chat",
         ],
     },
 )

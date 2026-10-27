@@ -4,5 +4,7 @@ python-dotenv==1.2.2
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
 google-cloud-datastore==1.14.0
+google-cloud-firestore==2.15.0
+rich
 setuptools<81.0
 six>=1.16.0

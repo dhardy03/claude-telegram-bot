@@ -1,8 +1,12 @@
 # dependencies
 venv/
 
-# environment variables
+# environment variables and credentials
 .env
+.env.local
+*-key.json
+service-account*.json
+*.pem
 
 # IDE
 .idea/
@@ -16,6 +20,5 @@ __pycache__/
 dist/
 build/
 
-# docker
+# logs
 *.log
-
